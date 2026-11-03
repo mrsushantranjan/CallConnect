@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   AppState,
@@ -34,6 +34,7 @@ const ENABLED_KEY = 'callconnect_enabled';
 const MESSAGE_KEY = 'callconnect_message';
 const DEFAULT_MESSAGE = 'Thanks for connecting with us.';
 const MAX_MESSAGE_LENGTH = 300;
+const DEBOUNCE_DELAY_MS = 350;
 
 export default function HomeScreen() {
   const [enabled, setEnabled] = useState(false);
@@ -62,7 +63,22 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const responsive = useResponsive();
 
-  // Load saved preferences and sync with native module
+  // Ref to hold the latest message text for debouncing and blur flushing
+  const pendingMessageRef = useRef(message);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const perms = await checkCallConnectPermissions();
+      setPermissions(perms);
+      const status = await getLastCallStatus();
+      setLastCall(status);
+    } catch {
+      // Graceful fallback
+    }
+  }, []);
+
+  // Initial preferences load & sync with native module
   useEffect(() => {
     async function loadSettings() {
       let initialEnabled = false;
@@ -79,6 +95,7 @@ export default function HomeScreen() {
         if (savedMessage !== null) {
           initialMessage = savedMessage;
           setMessage(savedMessage);
+          pendingMessageRef.current = savedMessage;
         }
       } catch {
         Alert.alert('Could not load saved settings.');
@@ -86,17 +103,15 @@ export default function HomeScreen() {
         setLoaded(true);
       }
 
-      // Sync to native Android SharedPreferences
+      // Synchronize with native Android SharedPreferences
       syncNativeSettings(initialEnabled, initialMessage);
-
-      // Check current permissions and call status
       refreshStatus();
     }
 
     loadSettings();
-  }, []);
+  }, [refreshStatus]);
 
-  // Refresh permissions and status when app comes to foreground
+  // Refresh status when app comes to foreground
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
@@ -104,53 +119,29 @@ export default function HomeScreen() {
       }
     });
     return () => subscription.remove();
+  }, [refreshStatus]);
+
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
   }, []);
 
-  async function refreshStatus() {
+  // Flush pending message to disk and native storage
+  const persistMessage = useCallback(async (textToSave: string, currentEnabled: boolean) => {
     try {
-      const perms = await checkCallConnectPermissions();
-      setPermissions(perms);
-      const status = await getLastCallStatus();
-      setLastCall(status);
-    } catch {
-      // Graceful fallback
-    }
-  }
-
-  async function saveEnabled(value: boolean) {
-    setEnabled(value);
-    setSavedNotice(false);
-
-    try {
-      await AsyncStorage.setItem(ENABLED_KEY, String(value));
+      await AsyncStorage.setItem(MESSAGE_KEY, textToSave);
       setSavedNotice(true);
-      // Synchronize with Android background broadcast receiver
-      syncNativeSettings(value, message);
-    } catch {
-      Alert.alert('Could not save the setting.');
-    }
-
-    // If enabling and permissions are needed on Android, prompt user
-    if (value && permissions.isNativeAvailable && !permissions.canAutoSendDirect && !permissions.canPromptComposer) {
-      handleRequestPermissions();
-    }
-  }
-
-  async function saveMessage(value: string) {
-    setMessage(value);
-    setSavedNotice(false);
-
-    try {
-      await AsyncStorage.setItem(MESSAGE_KEY, value);
-      setSavedNotice(true);
-      // Synchronize with Android background broadcast receiver
-      syncNativeSettings(enabled, value);
+      syncNativeSettings(currentEnabled, textToSave);
     } catch {
       Alert.alert('Could not save the message.');
     }
-  }
+  }, []);
 
-  async function handleRequestPermissions() {
+  const handleRequestPermissions = useCallback(async () => {
     const granted = await requestCallConnectPermissions();
     refreshStatus();
     if (!granted) {
@@ -163,7 +154,57 @@ export default function HomeScreen() {
         ]
       );
     }
-  }
+  }, [refreshStatus]);
+
+  const saveEnabled = useCallback(async (value: boolean) => {
+    setEnabled(value);
+    setSavedNotice(false);
+
+    // Flush any pending message edit immediately alongside enabled change
+    const currentMsg = pendingMessageRef.current;
+
+    try {
+      await AsyncStorage.setItem(ENABLED_KEY, String(value));
+      setSavedNotice(true);
+      syncNativeSettings(value, currentMsg);
+    } catch {
+      Alert.alert('Could not save the setting.');
+    }
+
+    // Prompt user if enabling without required permissions on Android
+    if (value && permissions.isNativeAvailable && !permissions.canAutoSendDirect && !permissions.canPromptComposer) {
+      handleRequestPermissions();
+    }
+  }, [handleRequestPermissions, permissions]);
+
+  // High-performance debounced message handler: updates UI immediately (60fps), debounces I/O
+  const handleMessageChange = useCallback((value: string) => {
+    setMessage(value);
+    pendingMessageRef.current = value;
+    setSavedNotice(false);
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = setTimeout(() => {
+      persistMessage(value, enabled);
+    }, DEBOUNCE_DELAY_MS);
+  }, [enabled, persistMessage]);
+
+  const handleInputBlur = useCallback(() => {
+    setIsInputFocused(false);
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    persistMessage(pendingMessageRef.current, enabled);
+  }, [enabled, persistMessage]);
+
+  const handleResetDefault = useCallback(() => {
+    handleMessageChange(DEFAULT_MESSAGE);
+    persistMessage(DEFAULT_MESSAGE, enabled);
+  }, [enabled, handleMessageChange, persistMessage]);
 
   const charCount = message.length;
   const isNearLimit = charCount >= 270;
@@ -173,9 +214,61 @@ export default function HomeScreen() {
   const topPadding = Math.max(insets.top + Spacing.two, Spacing.four);
   const bottomPadding = insets.bottom + BottomTabInset + Spacing.four;
 
-  // Derive operational readiness
+  // Operational states
   const isOperationallyReady = enabled && permissions.canAutoSendDirect;
   const isPromptReady = enabled && permissions.canPromptComposer && !permissions.canAutoSendDirect;
+
+  // Memoized dynamic styles for layout efficiency
+  const dynamicStyles = useMemo(() => {
+    return {
+      scrollContent: {
+        paddingTop: topPadding,
+        paddingBottom: bottomPadding,
+        paddingHorizontal: responsive.horizontalPadding,
+      },
+      containerWidth: {
+        maxWidth: responsive.contentMaxWidth,
+      },
+      heroCard: {
+        backgroundColor: theme.heroBackground,
+        borderColor: theme.heroCardBorder,
+        padding: responsive.heroPadding,
+      },
+      heroTitleText: {
+        fontSize: responsive.heroTitleSize,
+        lineHeight: Math.round(responsive.heroTitleSize * 1.25),
+      },
+      card: {
+        backgroundColor: theme.cardBackground,
+        borderColor: theme.cardBorder,
+        padding: responsive.cardPadding,
+      },
+      input: {
+        minHeight: responsive.inputMinHeight,
+        backgroundColor: theme.inputBackground,
+        borderColor: isInputFocused ? theme.inputBorderFocused : theme.inputBorder,
+        color: theme.text,
+      },
+    };
+  }, [
+    topPadding,
+    bottomPadding,
+    responsive.horizontalPadding,
+    responsive.contentMaxWidth,
+    responsive.heroPadding,
+    responsive.heroTitleSize,
+    responsive.cardPadding,
+    responsive.inputMinHeight,
+    theme.heroBackground,
+    theme.heroCardBorder,
+    theme.cardBackground,
+    theme.cardBorder,
+    theme.inputBackground,
+    theme.inputBorder,
+    theme.inputBorderFocused,
+    theme.text,
+    isInputFocused,
+  ]);
 
   return (
     <View style={[styles.root, { backgroundColor: theme.background }]}>
@@ -185,22 +278,11 @@ export default function HomeScreen() {
         <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
           <ScrollView
             style={styles.scrollView}
-            contentContainerStyle={[
-              styles.scrollContent,
-              {
-                paddingTop: topPadding,
-                paddingBottom: bottomPadding,
-                paddingHorizontal: responsive.horizontalPadding,
-              },
-            ]}
+            contentContainerStyle={[styles.scrollContent, dynamicStyles.scrollContent]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
             {/* Centered responsive container constrained on tablets */}
-            <View
-              style={[
-                styles.responsiveContainer,
-                { maxWidth: responsive.contentMaxWidth },
-              ]}>
+            <View style={[styles.responsiveContainer, dynamicStyles.containerWidth]}>
               {/* Top Branding Header */}
               <View style={styles.header}>
                 <View style={styles.logoAndBrand}>
@@ -253,39 +335,21 @@ export default function HomeScreen() {
               </View>
 
               {/* Modern Dark Hero Card */}
-              <View
-                style={[
-                  styles.hero,
-                  {
-                    backgroundColor: theme.heroBackground,
-                    borderColor: theme.heroCardBorder,
-                    padding: responsive.heroPadding,
-                  },
-                ]}>
+              <View style={[styles.hero, dynamicStyles.heroCard]}>
                 <View style={styles.eyebrowContainer}>
                   <Text style={[styles.eyebrow, { color: theme.heroAccent }]}>
                     YOUR CALL ASSISTANT
                   </Text>
                 </View>
 
-                <Text
-                  style={[
-                    styles.heroTitle,
-                    {
-                      fontSize: responsive.heroTitleSize,
-                      lineHeight: Math.round(responsive.heroTitleSize * 1.25),
-                    },
-                  ]}>
+                <Text style={[styles.heroTitle, dynamicStyles.heroTitleText]}>
                   A thoughtful follow-up,
                 </Text>
                 <Text
                   style={[
                     styles.heroTitleAccent,
-                    {
-                      color: theme.heroAccent,
-                      fontSize: responsive.heroTitleSize,
-                      lineHeight: Math.round(responsive.heroTitleSize * 1.25),
-                    },
+                    { color: theme.heroAccent },
+                    dynamicStyles.heroTitleText,
                   ]}>
                   after every call.
                 </Text>
@@ -326,7 +390,7 @@ export default function HomeScreen() {
                       borderColor: isOperationallyReady
                         ? theme.statusSuccessBorder
                         : isPromptReady
-                        ? '#FDE68A'
+                        ? theme.statusWarningBorder
                         : theme.cardBorder,
                     },
                   ]}>
@@ -338,7 +402,7 @@ export default function HomeScreen() {
                           backgroundColor: isOperationallyReady
                             ? theme.statusSuccessBg
                             : isPromptReady
-                            ? '#FEF3C7'
+                            ? theme.statusWarningBg
                             : theme.primaryLight,
                         },
                       ]}>
@@ -348,7 +412,7 @@ export default function HomeScreen() {
                           color: isOperationallyReady
                             ? theme.statusSuccess
                             : isPromptReady
-                            ? '#D97706'
+                            ? theme.statusWarning
                             : theme.primary,
                         }}>
                         {isOperationallyReady ? '✓' : isPromptReady ? '💬' : '⚙'}
@@ -378,6 +442,7 @@ export default function HomeScreen() {
                     <View style={styles.permissionActionRow}>
                       <Pressable
                         onPress={handleRequestPermissions}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         style={({ pressed }) => [
                           styles.actionBtn,
                           { backgroundColor: theme.primary },
@@ -390,6 +455,7 @@ export default function HomeScreen() {
 
                       <Pressable
                         onPress={openCallConnectSettings}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                         style={({ pressed }) => [
                           styles.secondaryBtn,
                           { borderColor: theme.cardBorder },
@@ -444,15 +510,7 @@ export default function HomeScreen() {
               )}
 
               {/* Main Interaction Card */}
-              <View
-                style={[
-                  styles.card,
-                  {
-                    backgroundColor: theme.cardBackground,
-                    borderColor: theme.cardBorder,
-                    padding: responsive.cardPadding,
-                  },
-                ]}>
+              <View style={[styles.card, dynamicStyles.card]}>
                 {/* Auto-reply Switch Row */}
                 <View style={styles.cardHeader}>
                   <View
@@ -511,7 +569,7 @@ export default function HomeScreen() {
                   </Text>
                   {message !== DEFAULT_MESSAGE && (
                     <Pressable
-                      onPress={() => saveMessage(DEFAULT_MESSAGE)}
+                      onPress={handleResetDefault}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       style={({ pressed }) => [
                         styles.resetButton,
@@ -527,24 +585,14 @@ export default function HomeScreen() {
                 {/* Styled Message Input */}
                 <TextInput
                   value={message}
-                  onChangeText={saveMessage}
+                  onChangeText={handleMessageChange}
                   onFocus={() => setIsInputFocused(true)}
-                  onBlur={() => setIsInputFocused(false)}
+                  onBlur={handleInputBlur}
                   placeholder="Type your message"
                   placeholderTextColor={theme.textSecondary}
                   multiline
                   maxLength={MAX_MESSAGE_LENGTH}
-                  style={[
-                    styles.input,
-                    {
-                      minHeight: responsive.inputMinHeight,
-                      backgroundColor: theme.inputBackground,
-                      borderColor: isInputFocused
-                        ? theme.inputBorderFocused
-                        : theme.inputBorder,
-                      color: theme.text,
-                    },
-                  ]}
+                  style={[styles.input, dynamicStyles.input]}
                   editable={loaded}
                   textAlignVertical="top"
                 />
@@ -578,7 +626,7 @@ export default function HomeScreen() {
                         color: isAtLimit
                           ? '#EF4444'
                           : isNearLimit
-                          ? '#F59E0B'
+                          ? theme.statusWarning
                           : theme.textSecondary,
                       },
                     ]}>
