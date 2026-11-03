@@ -19,7 +19,13 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.boss_01.CallConnect"
+      "package": "com.boss_01.CallConnect",
+      "permissions": [
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.READ_CALL_LOG",
+        "android.permission.SEND_SMS",
+        "android.permission.POST_NOTIFICATIONS"
+      ]
     },
     "web": {
       "output": "server",

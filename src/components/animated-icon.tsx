@@ -1,50 +1,82 @@
-import { Image } from 'expo-image';
 import * as SplashScreen from 'expo-splash-screen';
 import { useState } from 'react';
-import { Dimensions, StyleSheet, View } from 'react-native';
-import Animated, { Easing, Keyframe } from 'react-native-reanimated';
+import { StyleSheet, Text, View } from 'react-native';
+import Animated, { Easing, Keyframe, useReducedMotion } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
-const INITIAL_SCALE_FACTOR = Dimensions.get('screen').height / 90;
-const DURATION = 600;
+const NORMAL_DURATION = 1100;
+const REDUCED_DURATION = 500;
 
 export function AnimatedSplashOverlay() {
   const [animate, setAnimate] = useState(false);
   const [visible, setVisible] = useState(true);
+  const reducedMotion = useReducedMotion();
 
   if (!visible) return null;
 
-  const splashKeyframe = new Keyframe({
+  // Standard animation: gentle scale-in, hold, and smooth fade-out
+  const standardKeyframe = new Keyframe({
     0: {
-      transform: [{ scale: 1 }],
-      opacity: 1,
-    },
-    20: {
-      opacity: 1,
-    },
-    70: {
       opacity: 0,
-      easing: Easing.elastic(0.7),
+      transform: [{ scale: 0.92 }],
+    },
+    25: {
+      opacity: 1,
+      transform: [{ scale: 1.0 }],
+      easing: Easing.out(Easing.cubic),
+    },
+    75: {
+      opacity: 1,
+      transform: [{ scale: 1.0 }],
     },
     100: {
       opacity: 0,
-      transform: [{ scale: 1 }],
-      easing: Easing.elastic(0.7),
+      transform: [{ scale: 1.02 }],
+      easing: Easing.in(Easing.cubic),
     },
   });
 
-  const image = <Image style={styles.image} source={require('@/assets/images/expo-logo.png')} />;
+  // Reduced motion: simple opacity fade without scale/transform effects
+  const reducedKeyframe = new Keyframe({
+    0: {
+      opacity: 0,
+    },
+    25: {
+      opacity: 1,
+    },
+    75: {
+      opacity: 1,
+    },
+    100: {
+      opacity: 0,
+    },
+  });
+
+  const activeKeyframe = reducedMotion ? reducedKeyframe : standardKeyframe;
+  const activeDuration = reducedMotion ? REDUCED_DURATION : NORMAL_DURATION;
 
   return animate ? (
     <Animated.View
-      entering={splashKeyframe.duration(DURATION).withCallback((finished) => {
+      entering={activeKeyframe.duration(activeDuration).withCallback((finished) => {
         'worklet';
         if (finished) {
           scheduleOnRN(setVisible, false);
         }
       })}
       style={styles.splashOverlay}>
-      {image}
+      <View style={styles.brandContainer}>
+        {/* CallConnect App Icon Mark */}
+        <View style={styles.logoMark}>
+          <Text style={styles.logoText}>C</Text>
+          <View style={styles.signalDot} />
+        </View>
+
+        {/* Brand Name */}
+        <Text style={styles.brandTitle}>CallConnect</Text>
+
+        {/* Tagline */}
+        <Text style={styles.brandTagline}>Stay connected, effortlessly</Text>
+      </View>
     </Animated.View>
   ) : (
     <View
@@ -54,95 +86,88 @@ export function AnimatedSplashOverlay() {
         });
       }}
       style={styles.splashOverlay}>
-      {image}
+      <View style={styles.brandContainer}>
+        <View style={styles.logoMark}>
+          <Text style={styles.logoText}>C</Text>
+          <View style={styles.signalDot} />
+        </View>
+        <Text style={styles.brandTitle}>CallConnect</Text>
+        <Text style={styles.brandTagline}>Stay connected, effortlessly</Text>
+      </View>
     </View>
   );
 }
 
-const keyframe = new Keyframe({
-  0: {
-    transform: [{ scale: INITIAL_SCALE_FACTOR }],
-  },
-  100: {
-    transform: [{ scale: 1 }],
-    easing: Easing.elastic(0.7),
-  },
-});
-
-const logoKeyframe = new Keyframe({
-  0: {
-    transform: [{ scale: 1.3 }],
-    opacity: 0,
-  },
-  40: {
-    transform: [{ scale: 1.3 }],
-    opacity: 0,
-    easing: Easing.elastic(0.7),
-  },
-  100: {
-    opacity: 1,
-    transform: [{ scale: 1 }],
-    easing: Easing.elastic(0.7),
-  },
-});
-
-const glowKeyframe = new Keyframe({
-  0: {
-    transform: [{ rotateZ: '0deg' }],
-  },
-  100: {
-    transform: [{ rotateZ: '7200deg' }],
-  },
-});
-
 export function AnimatedIcon() {
   return (
     <View style={styles.iconContainer}>
-      <Animated.View entering={glowKeyframe.duration(60 * 1000 * 4)} style={styles.glow}>
-        <Image style={styles.glow} source={require('@/assets/images/logo-glow.png')} />
-      </Animated.View>
-
-      <Animated.View entering={keyframe.duration(DURATION)} style={styles.background} />
-      <Animated.View style={styles.imageContainer} entering={logoKeyframe.duration(DURATION)}>
-        <Image style={styles.image} source={require('@/assets/images/expo-logo.png')} />
-      </Animated.View>
+      <View style={styles.logoMark}>
+        <Text style={styles.logoText}>C</Text>
+        <View style={styles.signalDot} />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  imageContainer: {
-    justifyContent: 'center',
+  splashOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: '#0F172A',
     alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 9999,
   },
-  glow: {
-    width: 201,
-    height: 201,
+  brandContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoMark: {
+    width: 68,
+    height: 68,
+    borderRadius: 22,
+    backgroundColor: '#4F46E5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+    shadowColor: '#4F46E5',
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+    position: 'relative',
+  },
+  logoText: {
+    color: '#FFFFFF',
+    fontSize: 36,
+    fontWeight: '800',
+    letterSpacing: -1,
+  },
+  signalDot: {
     position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4ADE80',
+  },
+  brandTitle: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+    marginBottom: 6,
+  },
+  brandTagline: {
+    color: '#94A3B8',
+    fontSize: 14,
+    fontWeight: '500',
+    letterSpacing: 0.2,
   },
   iconContainer: {
     justifyContent: 'center',
     alignItems: 'center',
     width: 128,
     height: 128,
-    zIndex: 100,
-  },
-  image: {
-    width: 76,
-    height: 71,
-  },
-  background: {
-    borderRadius: 40,
-    experimental_backgroundImage: `linear-gradient(180deg, #3C9FFE, #0274DF)`,
-    width: 128,
-    height: 128,
-    position: 'absolute',
-  },
-  splashOverlay: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: '#208AEF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
   },
 });
