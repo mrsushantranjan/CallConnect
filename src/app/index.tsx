@@ -1,1102 +1,765 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  Alert,
-  AppState,
-  Keyboard,
-  KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
-  TouchableWithoutFeedback,
   View,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { LastMessageCard } from '@/components/features/last-message-card';
+import { MessageSheetModal } from '@/components/features/message-sheet-modal';
+import { ThemedText } from '@/components/themed-text';
+import { WelcomeScreen } from '@/components/welcome-screen';
 import { BottomTabInset, Colors, Radii, Spacing } from '@/constants/theme';
+import { useCallConnect } from '@/context/call-connect-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import {
-  checkCallConnectPermissions,
-  getLastCallStatus,
-  openCallConnectSettings,
-  requestCallConnectPermissions,
-  syncNativeSettings,
-  type CallConnectPermissions,
-  type LastCallStatus,
-} from '@/services/call-connect';
 import { useResponsive } from '@/styles/responsive';
-
-const ENABLED_KEY = 'callconnect_enabled';
-const MESSAGE_KEY = 'callconnect_message';
-const DEFAULT_MESSAGE = 'Thanks for connecting with us.';
-const MAX_MESSAGE_LENGTH = 300;
-const DEBOUNCE_DELAY_MS = 350;
+import { formatRelativeTimestamp, maskPhoneNumber } from '@/utils/call-connect-helpers';
 
 export default function HomeScreen() {
-  const [enabled, setEnabled] = useState(false);
-  const [message, setMessage] = useState(DEFAULT_MESSAGE);
-  const [loaded, setLoaded] = useState(false);
-  const [savedNotice, setSavedNotice] = useState(false);
-  const [isInputFocused, setIsInputFocused] = useState(false);
-
-  const [permissions, setPermissions] = useState<CallConnectPermissions>({
-    isNativeAvailable: false,
-    phoneState: false,
-    callLog: false,
-    sendSms: false,
-    notifications: false,
-    canAutoSendDirect: false,
-    canPromptComposer: false,
-  });
-
-  const [lastCall, setLastCall] = useState<LastCallStatus>({
-    status: 'Ready for calls',
-    timestamp: 0,
-  });
-
+  const router = useRouter();
+  const safeAreaInsets = useSafeAreaInsets();
+  const responsive = useResponsive();
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme === 'dark' ? 'dark' : 'light'];
-  const insets = useSafeAreaInsets();
-  const responsive = useResponsive();
 
-  // Ref to hold the latest message text for debouncing and blur flushing
-  const pendingMessageRef = useRef(message);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const {
+    enabled,
+    message,
+    loaded,
+    welcomeCompleted,
+    showWelcomeTour,
+    templates,
+    pendingSms,
+    activityLogs,
+    lastMessage,
+    permissions,
+    consentGranted,
+    delaySeconds,
+    isQuietHoursActive,
+    toggleEnabled,
+    grantConsent,
+    requestPermissions,
+    saveMessage,
+    saveTemplate,
+    cancelPending,
+    completeWelcome,
+  } = useCallConnect();
 
-  const refreshStatus = useCallback(async () => {
-    try {
-      const perms = await checkCallConnectPermissions();
-      setPermissions(perms);
-      const status = await getLastCallStatus();
-      setLastCall(status);
-    } catch {
-      // Graceful fallback
+  const [isEditorModalOpen, setIsEditorModalOpen] = useState(false);
+  const [isConsentModalOpen, setIsConsentModalOpen] = useState(false);
+
+  const insets = {
+    ...safeAreaInsets,
+    bottom: safeAreaInsets.bottom + BottomTabInset + Spacing.four,
+  };
+
+  const hasMissingCorePermissions =
+    !permissions.phoneState || !permissions.callLog || !permissions.sendSms;
+
+  const handleToggleSwitch = async (val: boolean) => {
+    if (val && !consentGranted) {
+      setIsConsentModalOpen(true);
+      return;
     }
-  }, []);
+    await toggleEnabled(val);
+  };
 
-  // Initial preferences load & sync with native module
-  useEffect(() => {
-    async function loadSettings() {
-      let initialEnabled = false;
-      let initialMessage = DEFAULT_MESSAGE;
-
-      try {
-        const savedEnabled = await AsyncStorage.getItem(ENABLED_KEY);
-        const savedMessage = await AsyncStorage.getItem(MESSAGE_KEY);
-
-        if (savedEnabled !== null) {
-          initialEnabled = savedEnabled === 'true';
-          setEnabled(initialEnabled);
-        }
-        if (savedMessage !== null) {
-          initialMessage = savedMessage;
-          setMessage(savedMessage);
-          pendingMessageRef.current = savedMessage;
-        }
-      } catch {
-        Alert.alert('Could not load saved settings.');
-      } finally {
-        setLoaded(true);
-      }
-
-      // Synchronize with native Android SharedPreferences
-      syncNativeSettings(initialEnabled, initialMessage);
-      refreshStatus();
+  const handleConfirmConsent = async () => {
+    setIsConsentModalOpen(false);
+    await grantConsent();
+    await toggleEnabled(true);
+    if (hasMissingCorePermissions) {
+      await requestPermissions();
     }
+  };
 
-    loadSettings();
-  }, [refreshStatus]);
+  // 1. First-launch / welcome tour gate
+  if (!loaded) {
+    return null;
+  }
 
-  // Refresh status when app comes to foreground
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
-        refreshStatus();
-      }
-    });
-    return () => subscription.remove();
-  }, [refreshStatus]);
+  if (welcomeCompleted === false || showWelcomeTour) {
+    return <WelcomeScreen onGetStarted={completeWelcome} />;
+  }
 
-  // Clean up debounce timer on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, []);
-
-  // Flush pending message to disk and native storage
-  const persistMessage = useCallback(async (textToSave: string, currentEnabled: boolean) => {
-    try {
-      await AsyncStorage.setItem(MESSAGE_KEY, textToSave);
-      setSavedNotice(true);
-      syncNativeSettings(currentEnabled, textToSave);
-    } catch {
-      Alert.alert('Could not save the message.');
+  const getStatusBadge = () => {
+    if (!enabled) {
+      return {
+        label: 'AUTO-SMS PAUSED',
+        desc: 'Automatic follow-up messages are paused. Enable the switch to resume.',
+        bg: theme.statusInactiveBg,
+        border: theme.statusInactiveBorder,
+        color: theme.statusInactive,
+        dot: theme.statusInactive,
+      };
     }
-  }, []);
-
-  const handleRequestPermissions = useCallback(async () => {
-    const granted = await requestCallConnectPermissions();
-    refreshStatus();
-    if (!granted) {
-      Alert.alert(
-        'Permissions Recommended',
-        'CallConnect needs Phone State and Call Log permissions to detect when an answered phone call finishes.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Open Settings', onPress: openCallConnectSettings },
-        ]
-      );
+    if (hasMissingCorePermissions) {
+      return {
+        label: 'PERMISSIONS NEEDED',
+        desc: 'Phone, Call Log, and SMS permissions are required to detect calls and send SMS.',
+        bg: '#FEE2E2',
+        border: '#FCA5A5',
+        color: '#DC2626',
+        dot: '#DC2626',
+      };
     }
-  }, [refreshStatus]);
-
-  const saveEnabled = useCallback(async (value: boolean) => {
-    setEnabled(value);
-    setSavedNotice(false);
-
-    // Flush any pending message edit immediately alongside enabled change
-    const currentMsg = pendingMessageRef.current;
-
-    try {
-      await AsyncStorage.setItem(ENABLED_KEY, String(value));
-      setSavedNotice(true);
-      syncNativeSettings(value, currentMsg);
-    } catch {
-      Alert.alert('Could not save the setting.');
+    if (isQuietHoursActive) {
+      return {
+        label: 'QUIET HOURS ACTIVE',
+        desc: 'Messages are paused during your scheduled quiet hours.',
+        bg: theme.statusWarningBg,
+        border: theme.statusWarningBorder,
+        color: theme.statusWarning,
+        dot: theme.statusWarning,
+      };
     }
-
-    // Prompt user if enabling without required permissions on Android
-    if (value && permissions.isNativeAvailable && !permissions.canAutoSendDirect && !permissions.canPromptComposer) {
-      handleRequestPermissions();
-    }
-  }, [handleRequestPermissions, permissions]);
-
-  // High-performance debounced message handler: updates UI immediately (60fps), debounces I/O
-  const handleMessageChange = useCallback((value: string) => {
-    setMessage(value);
-    pendingMessageRef.current = value;
-    setSavedNotice(false);
-
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
-
-    debounceTimerRef.current = setTimeout(() => {
-      persistMessage(value, enabled);
-    }, DEBOUNCE_DELAY_MS);
-  }, [enabled, persistMessage]);
-
-  const handleInputBlur = useCallback(() => {
-    setIsInputFocused(false);
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-    }
-    persistMessage(pendingMessageRef.current, enabled);
-  }, [enabled, persistMessage]);
-
-  const handleResetDefault = useCallback(() => {
-    handleMessageChange(DEFAULT_MESSAGE);
-    persistMessage(DEFAULT_MESSAGE, enabled);
-  }, [enabled, handleMessageChange, persistMessage]);
-
-  const charCount = message.length;
-  const isNearLimit = charCount >= 270;
-  const isAtLimit = charCount >= MAX_MESSAGE_LENGTH;
-
-  // Safe vertical padding calculating status bar and bottom navigation tab inset
-  const topPadding = Math.max(insets.top + Spacing.two, Spacing.four);
-  const bottomPadding = insets.bottom + BottomTabInset + Spacing.four;
-
-  // Operational states
-  const isOperationallyReady = enabled && permissions.canAutoSendDirect;
-  const isPromptReady = enabled && permissions.canPromptComposer && !permissions.canAutoSendDirect;
-
-  // Memoized dynamic styles for layout efficiency
-  const dynamicStyles = useMemo(() => {
     return {
-      scrollContent: {
-        paddingTop: topPadding,
-        paddingBottom: bottomPadding,
-        paddingHorizontal: responsive.horizontalPadding,
-      },
-      containerWidth: {
-        maxWidth: responsive.contentMaxWidth,
-      },
-      heroCard: {
-        backgroundColor: theme.heroBackground,
-        borderColor: theme.heroCardBorder,
-        padding: responsive.heroPadding,
-      },
-      heroTitleText: {
-        fontSize: responsive.heroTitleSize,
-        lineHeight: Math.round(responsive.heroTitleSize * 1.25),
-      },
-      card: {
-        backgroundColor: theme.cardBackground,
-        borderColor: theme.cardBorder,
-        padding: responsive.cardPadding,
-      },
-      input: {
-        minHeight: responsive.inputMinHeight,
-        backgroundColor: theme.inputBackground,
-        borderColor: isInputFocused ? theme.inputBorderFocused : theme.inputBorder,
-        color: theme.text,
-      },
+      label: 'AUTOMATIC SENDING ACTIVE',
+      desc: 'CallConnect will automatically send your message after completed calls.',
+      bg: theme.statusSuccessBg,
+      border: theme.statusSuccessBorder,
+      color: theme.statusSuccess,
+      dot: theme.statusSuccess,
     };
-  }, [
-    topPadding,
-    bottomPadding,
-    responsive.horizontalPadding,
-    responsive.contentMaxWidth,
-    responsive.heroPadding,
-    responsive.heroTitleSize,
-    responsive.cardPadding,
-    responsive.inputMinHeight,
-    theme.heroBackground,
-    theme.heroCardBorder,
-    theme.cardBackground,
-    theme.cardBorder,
-    theme.inputBackground,
-    theme.inputBorder,
-    theme.inputBorderFocused,
-    theme.text,
-    isInputFocused,
-  ]);
+  };
+
+  const statusBadge = getStatusBadge();
 
   return (
-    <View style={[styles.root, { backgroundColor: theme.background }]}>
-      <KeyboardAvoidingView
-        style={styles.keyboardAvoider}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-          <ScrollView
-            style={styles.scrollView}
-            contentContainerStyle={[styles.scrollContent, dynamicStyles.scrollContent]}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}>
-            {/* Centered responsive container constrained on tablets */}
-            <View style={[styles.responsiveContainer, dynamicStyles.containerWidth]}>
-              {/* Top Branding Header */}
-              <View style={styles.header}>
-                <View style={styles.logoAndBrand}>
-                  <View style={[styles.logo, { backgroundColor: theme.primary }]}>
-                    <Text style={styles.logoText}>C</Text>
-                  </View>
-                  <View style={styles.brandContainer}>
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.brand,
-                        {
-                          color: theme.text,
-                          fontSize: responsive.titleSize,
-                        },
-                      ]}>
-                      CallConnect
-                    </Text>
-                    <Text
-                      numberOfLines={1}
-                      style={[styles.tagline, { color: theme.textSecondary }]}>
-                      Stay connected, effortlessly
-                    </Text>
-                  </View>
-                </View>
+    <ScrollView
+      style={[styles.scrollView, { backgroundColor: theme.background }]}
+      contentContainerStyle={[
+        styles.contentContainer,
+        {
+          paddingTop: insets.top + (Platform.OS === 'android' ? Spacing.two : Spacing.four),
+          paddingBottom: insets.bottom,
+          paddingLeft: responsive.horizontalPadding,
+          paddingRight: responsive.horizontalPadding,
+        },
+      ]}
+      showsVerticalScrollIndicator={false}>
+      <View style={[styles.innerContainer, { maxWidth: responsive.contentMaxWidth }]}>
+        {/* TOP BAR: Branding & Settings Gear */}
+        <View style={styles.topBar}>
+          <View style={styles.brandRow}>
+            <View style={[styles.logoBadge, { backgroundColor: theme.primary }]}>
+              <Text style={styles.logoBadgeText}>CC</Text>
+            </View>
+            <View>
+              <ThemedText style={styles.brandTitle}>CallConnect</ThemedText>
+              <ThemedText style={styles.brandSubtitle}>Automatic Post-Call SMS</ThemedText>
+            </View>
+          </View>
 
-                {/* Local storage status chip */}
-                <View
-                  style={[
-                    styles.storageChip,
-                    {
-                      backgroundColor: theme.backgroundElement,
-                      borderColor: theme.cardBorder,
-                    },
-                  ]}>
-                  <View
-                    style={[
-                      styles.deviceDot,
-                      {
-                        backgroundColor: isOperationallyReady
-                          ? theme.statusSuccess
-                          : theme.primary,
-                      },
-                    ]}
-                  />
-                  <Text style={[styles.storageChipText, { color: theme.textSecondary }]}>
-                    On-device
-                  </Text>
-                </View>
-              </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open Settings"
+            style={({ pressed }) => [
+              styles.gearButton,
+              { backgroundColor: theme.cardBackground, borderColor: theme.cardBorder },
+              pressed && styles.pressed,
+            ]}
+            onPress={() => router.navigate('/settings')}>
+            <Text style={styles.gearIcon}>⚙️</Text>
+          </Pressable>
+        </View>
 
-              {/* Modern Dark Hero Card */}
-              <View style={[styles.hero, dynamicStyles.heroCard]}>
-                <View style={styles.eyebrowContainer}>
-                  <Text style={[styles.eyebrow, { color: theme.heroAccent }]}>
-                    YOUR CALL ASSISTANT
-                  </Text>
-                </View>
+        {/* SECTION 1: MASTER AUTOMATIC SMS CONTROL */}
+        <View
+          style={[
+            styles.masterCard,
+            { backgroundColor: theme.cardBackground, borderColor: theme.cardBorder },
+          ]}>
+          <View style={styles.switchRow}>
+            <View style={styles.switchTextContainer}>
+              <ThemedText style={styles.switchHeading}>Automatic Post-Call SMS</ThemedText>
+              <ThemedText style={styles.switchSubtext}>
+                {enabled
+                  ? 'Active: Automatically sends follow-up after call ends'
+                  : 'Disabled: Follow-ups will not be sent'}
+              </ThemedText>
+            </View>
+            <Switch
+              value={enabled}
+              onValueChange={handleToggleSwitch}
+              trackColor={{ false: theme.statusInactiveBorder, true: theme.primary }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
 
-                <Text style={[styles.heroTitle, dynamicStyles.heroTitleText]}>
-                  A thoughtful follow-up,
-                </Text>
-                <Text
-                  style={[
-                    styles.heroTitleAccent,
-                    { color: theme.heroAccent },
-                    dynamicStyles.heroTitleText,
-                  ]}>
-                  after every call.
-                </Text>
-
-                <Text style={styles.heroDescription}>
-                  Set a message to send when your call is finished.
-                </Text>
-
-                {/* Status indicator pill with clear active state */}
-                <View
-                  style={[
-                    styles.statusPill,
-                    enabled ? styles.statusPillActive : styles.statusPillInactive,
-                  ]}>
-                  <View
-                    style={[
-                      styles.statusDot,
-                      enabled ? styles.statusDotActive : styles.statusDotInactive,
-                    ]}
-                  />
-                  <Text
-                    style={[
-                      styles.statusText,
-                      enabled ? styles.statusTextActive : styles.statusTextInactive,
-                    ]}>
-                    {enabled ? 'Auto-reply enabled' : 'Auto-reply is off'}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Android Platform & Permission Feedback Section */}
-              {permissions.isNativeAvailable ? (
-                <View
-                  style={[
-                    styles.permissionCard,
-                    {
-                      backgroundColor: theme.cardBackground,
-                      borderColor: isOperationallyReady
-                        ? theme.statusSuccessBorder
-                        : isPromptReady
-                        ? theme.statusWarningBorder
-                        : theme.cardBorder,
-                    },
-                  ]}>
-                  <View style={styles.permissionHeaderRow}>
-                    <View
-                      style={[
-                        styles.statusCircle,
-                        {
-                          backgroundColor: isOperationallyReady
-                            ? theme.statusSuccessBg
-                            : isPromptReady
-                            ? theme.statusWarningBg
-                            : theme.primaryLight,
-                        },
-                      ]}>
-                      <Text
-                        style={{
-                          fontSize: 14,
-                          color: isOperationallyReady
-                            ? theme.statusSuccess
-                            : isPromptReady
-                            ? theme.statusWarning
-                            : theme.primary,
-                        }}>
-                        {isOperationallyReady ? '✓' : isPromptReady ? '💬' : '⚙'}
-                      </Text>
-                    </View>
-
-                    <View style={styles.permissionHeaderText}>
-                      <Text style={[styles.permissionTitle, { color: theme.text }]}>
-                        {isOperationallyReady
-                          ? 'Background SMS Ready'
-                          : isPromptReady
-                          ? 'Interactive Composer Ready'
-                          : 'Permissions Required for Call-End Detection'}
-                      </Text>
-                      <Text style={[styles.permissionSubtitle, { color: theme.textSecondary }]}>
-                        {isOperationallyReady
-                          ? 'Automatic SMS will trigger after completed answered calls.'
-                          : isPromptReady
-                          ? 'Direct SEND_SMS not granted: Call-end prompts 1-tap SMS composer (Play Store compliant).'
-                          : 'Phone State and Call Log permissions are needed to detect answered calls.'}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Action buttons if permissions are incomplete */}
-                  {!isOperationallyReady && (
-                    <View style={styles.permissionActionRow}>
-                      <Pressable
-                        onPress={handleRequestPermissions}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        style={({ pressed }) => [
-                          styles.actionBtn,
-                          { backgroundColor: theme.primary },
-                          pressed && styles.pressed,
-                        ]}>
-                        <Text style={styles.actionBtnText}>
-                          {!permissions.canPromptComposer ? 'Grant Permissions' : 'Enable Direct SMS'}
-                        </Text>
-                      </Pressable>
-
-                      <Pressable
-                        onPress={openCallConnectSettings}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        style={({ pressed }) => [
-                          styles.secondaryBtn,
-                          { borderColor: theme.cardBorder },
-                          pressed && styles.pressed,
-                        ]}>
-                        <Text style={[styles.secondaryBtnText, { color: theme.textSecondary }]}>
-                          App Settings
-                        </Text>
-                      </Pressable>
-                    </View>
-                  )}
-
-                  {/* Last Event Feedback Row */}
-                  <View style={[styles.lastEventRow, { borderTopColor: theme.cardBorder }]}>
-                    <Text style={[styles.lastEventLabel, { color: theme.textSecondary }]}>
-                      LAST CALL EVENT:
-                    </Text>
-                    <Text
-                      numberOfLines={1}
-                      style={[styles.lastEventValue, { color: theme.text }]}>
-                      {lastCall.status}
-                    </Text>
-                  </View>
-                </View>
-              ) : (
-                <View
-                  style={[
-                    styles.permissionCard,
-                    {
-                      backgroundColor: theme.infoBg,
-                      borderColor: theme.infoBorder,
-                    },
-                  ]}>
-                  <View style={styles.permissionHeaderRow}>
-                    <View
-                      style={[
-                        styles.statusCircle,
-                        { backgroundColor: theme.primaryLight },
-                      ]}>
-                      <Text style={{ fontSize: 13, color: theme.primary }}>ℹ</Text>
-                    </View>
-                    <View style={styles.permissionHeaderText}>
-                      <Text style={[styles.permissionTitle, { color: theme.text }]}>
-                        Android Development Build Note
-                      </Text>
-                      <Text style={[styles.permissionSubtitle, { color: theme.textSecondary }]}>
-                        Native telephony call detection requires an Android build (`npx expo run:android`). The native Kotlin receiver and preferences bridge are preconfigured.
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              )}
-
-              {/* Main Interaction Card */}
-              <View style={[styles.card, dynamicStyles.card]}>
-                {/* Auto-reply Switch Row */}
-                <View style={styles.cardHeader}>
-                  <View
-                    style={[
-                      styles.cardIcon,
-                      { backgroundColor: theme.primaryLight },
-                    ]}>
-                    <Text style={[styles.cardIconText, { color: theme.primary }]}>
-                      ↗
-                    </Text>
-                  </View>
-
-                  <View style={styles.cardHeaderText}>
-                    <Text style={[styles.cardTitle, { color: theme.text }]}>
-                      Auto-reply
-                    </Text>
-                    <Text
-                      style={[
-                        styles.cardSubtitle,
-                        { color: theme.textSecondary },
-                      ]}>
-                      Turn your follow-up preference on or off
-                    </Text>
-                  </View>
-
-                  <View style={styles.switchWrapper}>
-                    <Switch
-                      value={enabled}
-                      onValueChange={saveEnabled}
-                      disabled={!loaded}
-                      trackColor={{
-                        false: colorScheme === 'dark' ? '#334155' : '#D8DFEA',
-                        true: colorScheme === 'dark' ? '#4F46E5' : '#A5B4FC',
-                      }}
-                      thumbColor={enabled ? theme.primary : '#FFFFFF'}
-                    />
-                  </View>
-                </View>
-
-                {/* Divider */}
-                <View
-                  style={[
-                    styles.separator,
-                    { backgroundColor: theme.cardBorder },
-                  ]}
-                />
-
-                {/* Message Field Header */}
-                <View style={styles.fieldHeaderRow}>
-                  <Text
-                    style={[
-                      styles.fieldLabel,
-                      { color: theme.textSecondary },
-                    ]}>
-                    YOUR MESSAGE
-                  </Text>
-                  {message !== DEFAULT_MESSAGE && (
-                    <Pressable
-                      onPress={handleResetDefault}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      style={({ pressed }) => [
-                        styles.resetButton,
-                        pressed && styles.pressed,
-                      ]}>
-                      <Text style={[styles.resetText, { color: theme.primary }]}>
-                        Reset default
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-
-                {/* Styled Message Input */}
-                <TextInput
-                  value={message}
-                  onChangeText={handleMessageChange}
-                  onFocus={() => setIsInputFocused(true)}
-                  onBlur={handleInputBlur}
-                  placeholder="Type your message"
-                  placeholderTextColor={theme.textSecondary}
-                  multiline
-                  maxLength={MAX_MESSAGE_LENGTH}
-                  style={[styles.input, dynamicStyles.input]}
-                  editable={loaded}
-                  textAlignVertical="top"
-                />
-
-                {/* Message Footnote & Character Counter */}
-                <View style={styles.messageFooter}>
-                  <View style={styles.saveNoticeContainer}>
-                    {savedNotice ? (
-                      <Text
-                        style={[
-                          styles.savedNotice,
-                          { color: theme.statusSuccess },
-                        ]}>
-                        ✓ Saved on this device
-                      </Text>
-                    ) : (
-                      <Text
-                        style={[
-                          styles.savedNoticeMuted,
-                          { color: theme.textSecondary },
-                        ]}>
-                        Saved on this device
-                      </Text>
-                    )}
-                  </View>
-
-                  <Text
-                    style={[
-                      styles.characterCount,
-                      {
-                        color: isAtLimit
-                          ? '#EF4444'
-                          : isNearLimit
-                          ? theme.statusWarning
-                          : theme.textSecondary,
-                      },
-                    ]}>
-                    {charCount}/{MAX_MESSAGE_LENGTH}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Informational & Transparency Callout */}
-              <View
-                style={[
-                  styles.infoBox,
-                  {
-                    backgroundColor: theme.infoBg,
-                    borderColor: theme.infoBorder,
-                  },
-                ]}>
-                <View
-                  style={[
-                    styles.infoIconWrapper,
-                    { backgroundColor: theme.primaryLight },
-                  ]}>
-                  <Text style={[styles.infoIconText, { color: theme.infoIcon }]}>
-                    i
-                  </Text>
-                </View>
-                <Text
-                  style={[
-                    styles.infoText,
-                    { color: theme.infoText },
-                  ]}>
-                  {permissions.isNativeAvailable
-                    ? permissions.canAutoSendDirect && enabled
-                      ? 'Your preferences are saved on this device. Auto-reply is active for completed answered calls.'
-                      : 'Your preferences are saved on this device. Permissions or auto-reply switch are required to initiate SMS.'
-                    : 'Your preferences are saved on this device. Automatic SMS sending is active when running in the native Android build with required permissions.'}
-                </Text>
-              </View>
-
-              {/* Privacy Notice Card */}
-              <View
-                style={[
-                  styles.privacyCard,
-                  {
-                    backgroundColor: theme.cardBackground,
-                    borderColor: theme.cardBorder,
-                  },
-                ]}>
-                <Text style={[styles.privacyTitle, { color: theme.text }]}>
-                  Privacy & Data Handling
-                </Text>
-                <Text style={[styles.privacyText, { color: theme.textSecondary }]}>
-                  CallConnect operates 100% on-device. Phone numbers and message contents are processed locally to initiate follow-ups and are never sent to external servers, cloud storage, or third-party analytics.
-                </Text>
-              </View>
-
-              {/* Footer */}
-              <Text
-                style={[
-                  styles.footer,
-                  { color: theme.textSecondary },
-                ]}>
-                MADE TO KEEP YOU CONNECTED
+          {/* Status Indicator Banner */}
+          <View
+            style={[
+              styles.statusBanner,
+              { backgroundColor: statusBadge.bg, borderColor: statusBadge.border },
+            ]}>
+            <View style={styles.statusBadgeHeader}>
+              <View style={[styles.statusDot, { backgroundColor: statusBadge.dot }]} />
+              <Text style={[styles.statusBadgeTitle, { color: statusBadge.color }]}>
+                {statusBadge.label}
               </Text>
             </View>
-          </ScrollView>
-        </TouchableWithoutFeedback>
-      </KeyboardAvoidingView>
-    </View>
+            <Text style={[styles.statusBadgeDesc, { color: statusBadge.color }]}>
+              {statusBadge.desc}
+            </Text>
+          </View>
+
+          {/* Missing permissions call-to-action */}
+          {hasMissingCorePermissions && (
+            <View style={styles.permActionRow}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Grant required permissions"
+                style={[styles.grantButton, { backgroundColor: theme.primary }]}
+                onPress={requestPermissions}>
+                <Text style={styles.grantButtonText}>Grant Permissions</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+
+        {/* ACTIVE PENDING DELAY COUNTDOWN (if delay active) */}
+        {pendingSms.isPending && (
+          <View
+            style={[
+              styles.pendingBanner,
+              { backgroundColor: theme.statusWarningBg, borderColor: theme.statusWarningBorder },
+            ]}>
+            <View style={styles.pendingTextWrapper}>
+              <Text style={[styles.pendingTitle, { color: theme.statusWarning }]}>
+                ⏳ SENDING AUTO-REPLY IN {pendingSms.secondsRemaining}s
+              </Text>
+              <Text
+                style={[styles.pendingSubtext, { color: theme.textSecondary }]}
+                numberOfLines={1}>
+                {pendingSms.phoneNumber
+                  ? `To ${maskPhoneNumber(pendingSms.phoneNumber)}: `
+                  : 'Follow-up: '}
+                &ldquo;{pendingSms.message}&rdquo;
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel pending automatic SMS send"
+              style={[styles.cancelButton, { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }]}
+              onPress={cancelPending}>
+              <Text style={[styles.cancelButtonText, { color: '#EF4444' }]}>Cancel Send</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* SECTION 2: CONFIGURED MESSAGE & DELAY SUMMARY */}
+        <View style={styles.sectionWrapper}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+              FOLLOW-UP MESSAGE
+            </Text>
+            <Text style={[styles.charCount, { color: theme.textSecondary }]}>
+              {message.length} / 300
+            </Text>
+          </View>
+
+          <View
+            style={[
+              styles.messageCard,
+              { backgroundColor: theme.cardBackground, borderColor: theme.cardBorder },
+            ]}>
+            <Text style={[styles.quoteMark, { color: theme.primary }]}>&ldquo;</Text>
+            <ThemedText style={styles.messageContent}>{message}</ThemedText>
+
+            <View style={[styles.metaDivider, { backgroundColor: theme.cardBorder }]} />
+
+            <View style={styles.messageMetaRow}>
+              <View style={styles.delayBadge}>
+                <Text style={[styles.delayBadgeText, { color: theme.textSecondary }]}>
+                  ⏱️ Send Delay: {delaySeconds === 0 ? 'Instant (0s)' : `${delaySeconds} seconds`}
+                </Text>
+              </View>
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Edit follow-up message"
+                style={({ pressed }) => [
+                  styles.editButton,
+                  { backgroundColor: theme.primary },
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => setIsEditorModalOpen(true)}>
+                <Text style={styles.editButtonText}>Edit Message</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+
+        {/* SECTION 3: RECENT ACTIVITY */}
+        <View style={styles.sectionWrapper}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+              RECENT ACTIVITY
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="View settings"
+              onPress={() => router.navigate('/settings')}>
+              <Text style={[styles.settingsLinkText, { color: theme.primary }]}>
+                Settings & Rules →
+              </Text>
+            </Pressable>
+          </View>
+
+          <LastMessageCard lastMessage={lastMessage} lastLog={activityLogs[0] || null} />
+
+          {/* Activity items list (up to 3 recent items) */}
+          {activityLogs.length > 1 && (
+            <View
+              style={[
+                styles.recentLogsList,
+                { backgroundColor: theme.cardBackground, borderColor: theme.cardBorder },
+              ]}>
+              {activityLogs.slice(1, 4).map((log, idx) => (
+                <View
+                  key={log.id || `log_${idx}`}
+                  style={[
+                    styles.logRow,
+                    idx > 0 && { borderTopWidth: 1, borderTopColor: theme.cardBorder },
+                  ]}>
+                  <View style={styles.logLeft}>
+                    <Text style={[styles.logPhone, { color: theme.text }]}>
+                      {maskPhoneNumber(log.phoneNumber)}
+                    </Text>
+                    <Text
+                      style={[styles.logReason, { color: theme.textSecondary }]}
+                      numberOfLines={1}>
+                      {log.reason || log.messageSnippet}
+                    </Text>
+                  </View>
+                  <View style={styles.logRight}>
+                    <View
+                      style={[
+                        styles.logStatusBadge,
+                        {
+                          backgroundColor:
+                            log.status === 'sent'
+                              ? theme.statusSuccessBg
+                              : log.status === 'failed'
+                              ? '#FEE2E2'
+                              : theme.statusInactiveBg,
+                        },
+                      ]}>
+                      <Text
+                        style={[
+                          styles.logStatusText,
+                          {
+                            color:
+                              log.status === 'sent'
+                                ? theme.statusSuccess
+                                : log.status === 'failed'
+                                ? '#DC2626'
+                                : theme.textSecondary,
+                          },
+                        ]}>
+                        {log.status === 'sent' ? 'SUBMITTED' : log.status.toUpperCase()}
+                      </Text>
+                    </View>
+                    <Text style={[styles.logTime, { color: theme.textSecondary }]}>
+                      {formatRelativeTimestamp(log.timestamp)}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+      </View>
+
+      {/* USER CONSENT MODAL FOR AUTOMATIC SMS SENDING */}
+      <Modal
+        visible={isConsentModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsConsentModalOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View
+            style={[
+              styles.consentBox,
+              { backgroundColor: theme.cardBackground, borderColor: theme.cardBorder },
+            ]}>
+            <Text style={styles.consentIcon}>📱</Text>
+            <ThemedText style={styles.consentTitle}>Automatic SMS Consent</ThemedText>
+            <Text style={[styles.consentBody, { color: theme.textSecondary }]}>
+              When enabled, CallConnect will automatically send your configured follow-up text
+              message from your phone number after calls end (incoming answered, missed, rejected,
+              and outgoing calls).
+              {'\n\n'}
+              • Calls are matched against your allow/block rules and quiet hours.
+              {'\n'}• Carrier SMS rates may apply according to your cellular plan.
+            </Text>
+            <View style={styles.consentActions}>
+              <Pressable
+                style={[styles.consentCancelBtn, { borderColor: theme.cardBorder }]}
+                onPress={() => setIsConsentModalOpen(false)}>
+                <Text style={[styles.consentCancelText, { color: theme.textSecondary }]}>
+                  Cancel
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[styles.consentConfirmBtn, { backgroundColor: theme.primary }]}
+                onPress={handleConfirmConsent}>
+                <Text style={styles.consentConfirmText}>I Consent & Enable</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* MESSAGE SHEET / MODAL EDITOR */}
+      <MessageSheetModal
+        visible={isEditorModalOpen}
+        currentMessage={message}
+        templates={templates}
+        defaultMessage="Thanks for connecting with us."
+        onSave={saveMessage}
+        onSaveNewTemplate={saveTemplate}
+        onClose={() => setIsEditorModalOpen(false)}
+      />
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
-  keyboardAvoider: {
-    flex: 1,
-  },
   scrollView: {
     flex: 1,
   },
-  scrollContent: {
-    flexGrow: 1,
+  contentContainer: {
     alignItems: 'center',
   },
-  responsiveContainer: {
+  innerContainer: {
     width: '100%',
-    flexDirection: 'column',
   },
-  header: {
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: Spacing.four,
+    paddingVertical: Spacing.three,
+    marginBottom: Spacing.two,
   },
-  logoAndBrand: {
+  brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
-    marginRight: Spacing.two,
+    gap: Spacing.three,
   },
-  logo: {
+  logoBadge: {
     width: 44,
     height: 44,
-    borderRadius: Radii.md,
+    borderRadius: Radii.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: Spacing.three,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#4F46E5',
-        shadowOpacity: 0.25,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 3 },
-      },
-      android: {
-        elevation: 3,
-      },
-    }),
   },
-  logoText: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '800',
-  },
-  brandContainer: {
-    flex: 1,
-  },
-  brand: {
-    fontWeight: '800',
-    letterSpacing: -0.4,
-  },
-  tagline: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  storageChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.two + 2,
-    paddingVertical: Spacing.one + 1,
-    borderRadius: Radii.full,
-    borderWidth: 1,
-    flexShrink: 0,
-  },
-  deviceDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 6,
-  },
-  storageChipText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  hero: {
-    borderRadius: Radii.xxl,
-    marginBottom: Spacing.four,
-    borderWidth: 1,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#0F172A',
-        shadowOpacity: 0.08,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 6 },
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
-  },
-  eyebrowContainer: {
-    marginBottom: Spacing.two,
-  },
-  eyebrow: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1.6,
-  },
-  heroTitle: {
+  logoBadgeText: {
     color: '#FFFFFF',
     fontWeight: '800',
-    letterSpacing: -0.6,
+    fontSize: 18,
+    letterSpacing: -0.5,
   },
-  heroTitleAccent: {
+  brandTitle: {
+    fontSize: 20,
     fontWeight: '800',
-    letterSpacing: -0.6,
+    letterSpacing: -0.3,
   },
-  heroDescription: {
-    color: '#CBD5E1',
-    fontSize: 13,
-    lineHeight: 20,
-    marginTop: Spacing.two,
-  },
-  statusPill: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: Radii.full,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.one + 3,
-    marginTop: Spacing.four,
-    borderWidth: 1,
-  },
-  statusPillActive: {
-    backgroundColor: '#0F2922',
-    borderColor: '#065F46',
-  },
-  statusPillInactive: {
-    backgroundColor: '#1E293B',
-    borderColor: '#334155',
-  },
-  statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    marginRight: Spacing.two,
-  },
-  statusDotActive: {
-    backgroundColor: '#4ADE80',
-  },
-  statusDotInactive: {
-    backgroundColor: '#94A3B8',
-  },
-  statusText: {
+  brandSubtitle: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '500',
+    opacity: 0.65,
+    marginTop: 1,
   },
-  statusTextActive: {
-    color: '#86EFAC',
+  gearButton: {
+    width: 44,
+    height: 44,
+    borderRadius: Radii.full,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  statusTextInactive: {
-    color: '#94A3B8',
+  gearIcon: {
+    fontSize: 20,
   },
-  permissionCard: {
+  masterCard: {
     borderRadius: Radii.lg,
     borderWidth: 1,
-    padding: Spacing.three,
-    marginBottom: Spacing.three,
+    padding: Spacing.four,
+    marginBottom: Spacing.four,
   },
-  permissionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  statusCircle: {
-    width: 26,
-    height: 26,
-    borderRadius: Radii.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: Spacing.two + 2,
-    marginTop: 1,
-  },
-  permissionHeaderText: {
-    flex: 1,
-  },
-  permissionTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 19,
-  },
-  permissionSubtitle: {
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 3,
-  },
-  permissionActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: Spacing.three,
-    gap: Spacing.two,
-  },
-  actionBtn: {
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    borderRadius: Radii.sm,
-  },
-  actionBtnText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  secondaryBtn: {
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    borderRadius: Radii.sm,
-    borderWidth: 1,
-  },
-  secondaryBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  lastEventRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: Spacing.three,
-    paddingTop: Spacing.two,
-    borderTopWidth: 1,
-  },
-  lastEventLabel: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 1.1,
-    marginRight: Spacing.two,
-  },
-  lastEventValue: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  card: {
-    borderRadius: Radii.xl,
-    borderWidth: 1,
-    marginBottom: Spacing.three,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#0F172A',
-        shadowOpacity: 0.05,
-        shadowRadius: 16,
-        shadowOffset: { width: 0, height: 6 },
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
-  },
-  cardHeader: {
+  switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: Spacing.three,
   },
-  cardIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: Radii.md,
-    alignItems: 'center',
-    justifyContent: 'center',
+  switchTextContainer: {
+    flex: 1,
     marginRight: Spacing.three,
   },
-  cardIconText: {
-    fontSize: 22,
-    fontWeight: '700',
-  },
-  cardHeaderText: {
-    flex: 1,
-    paddingRight: Spacing.two,
-  },
-  cardTitle: {
+  switchHeading: {
     fontSize: 16,
     fontWeight: '700',
+    marginBottom: 2,
   },
-  cardSubtitle: {
+  switchSubtext: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#6B7280',
+  },
+  statusBanner: {
+    borderRadius: Radii.md,
+    borderWidth: 1,
+    padding: Spacing.three,
+    gap: 2,
+  },
+  statusBadgeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusBadgeTitle: {
     fontSize: 12,
-    lineHeight: 17,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  statusBadgeDesc: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '500',
     marginTop: 2,
   },
-  switchWrapper: {
-    justifyContent: 'center',
+  permActionRow: {
+    marginTop: Spacing.three,
+  },
+  grantButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: Radii.full,
+  },
+  grantButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  pendingBanner: {
+    flexDirection: 'row',
     alignItems: 'center',
-    minWidth: 48,
-    minHeight: 48,
-    flexShrink: 0,
+    justifyContent: 'space-between',
+    padding: Spacing.three,
+    borderRadius: Radii.lg,
+    borderWidth: 1,
+    marginBottom: Spacing.four,
+    gap: Spacing.two,
   },
-  separator: {
-    height: 1,
-    marginVertical: Spacing.three + 2,
+  pendingTextWrapper: {
+    flex: 1,
   },
-  fieldHeaderRow: {
+  pendingTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  pendingSubtext: {
+    fontSize: 12,
+  },
+  cancelButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Radii.full,
+    borderWidth: 1,
+  },
+  cancelButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  sectionWrapper: {
+    marginBottom: Spacing.four,
+  },
+  sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: Spacing.two,
+    paddingHorizontal: Spacing.one,
   },
-  fieldLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1.2,
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.8,
   },
-  resetButton: {
-    paddingVertical: 2,
-    paddingHorizontal: 4,
+  charCount: {
+    fontSize: 12,
+    fontWeight: '500',
   },
-  resetText: {
-    fontSize: 11,
-    fontWeight: '600',
+  settingsLinkText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
-  input: {
+  messageCard: {
+    borderRadius: Radii.lg,
     borderWidth: 1,
-    borderRadius: Radii.md,
-    padding: Spacing.three,
+    padding: Spacing.four,
+    position: 'relative',
+  },
+  quoteMark: {
+    fontSize: 28,
+    fontWeight: '800',
+    lineHeight: 28,
+    height: 22,
+    opacity: 0.4,
+  },
+  messageContent: {
     fontSize: 15,
     lineHeight: 22,
+    fontWeight: '500',
+    marginBottom: Spacing.three,
   },
-  messageFooter: {
+  metaDivider: {
+    height: 1,
+    width: '100%',
+    marginBottom: Spacing.three,
+  },
+  messageMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: Spacing.two,
-    minHeight: 20,
+    gap: Spacing.two,
   },
-  saveNoticeContainer: {
+  delayBadge: {
+    flex: 1,
+  },
+  delayBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  editButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: Radii.full,
+  },
+  editButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  recentLogsList: {
+    marginTop: Spacing.three,
+    borderRadius: Radii.lg,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  logRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.three,
+  },
+  logLeft: {
     flex: 1,
     marginRight: Spacing.two,
   },
-  savedNotice: {
-    fontSize: 11,
-    fontWeight: '600',
+  logPhone: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 2,
   },
-  savedNoticeMuted: {
-    fontSize: 11,
-    fontWeight: '500',
-    opacity: 0.6,
-  },
-  characterCount: {
+  logReason: {
     fontSize: 12,
-    fontWeight: '600',
   },
-  infoBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    borderRadius: Radii.md,
+  logRight: {
+    alignItems: 'flex-end',
+    gap: 3,
+  },
+  logStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: Radii.full,
+  },
+  logStatusText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  logTime: {
+    fontSize: 11,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.four,
+  },
+  consentBox: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: Radii.xl,
     borderWidth: 1,
-    padding: Spacing.three,
-    marginTop: Spacing.two,
+    padding: Spacing.five,
+    alignItems: 'center',
+  },
+  consentIcon: {
+    fontSize: 36,
     marginBottom: Spacing.two,
   },
-  infoIconWrapper: {
-    width: 20,
-    height: 20,
+  consentTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: Spacing.two,
+    textAlign: 'center',
+  },
+  consentBody: {
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: Spacing.four,
+  },
+  consentActions: {
+    flexDirection: 'row',
+    width: '100%',
+    gap: Spacing.three,
+  },
+  consentCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderWidth: 1,
     borderRadius: Radii.full,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: Spacing.two + 2,
-    marginTop: 1,
   },
-  infoIconText: {
-    fontSize: 12,
-    fontWeight: '800',
-    textAlign: 'center',
+  consentCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
-  infoText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 18,
+  consentConfirmBtn: {
+    flex: 1.5,
+    height: 44,
+    borderRadius: Radii.full,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  privacyCard: {
-    borderRadius: Radii.md,
-    borderWidth: 1,
-    padding: Spacing.three,
-    marginTop: Spacing.two,
-  },
-  privacyTitle: {
-    fontSize: 12,
+  consentConfirmText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '700',
-    marginBottom: 4,
-  },
-  privacyText: {
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  footer: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1.4,
-    textAlign: 'center',
-    marginTop: Spacing.four,
-    marginBottom: Spacing.two,
-    opacity: 0.8,
   },
   pressed: {
     opacity: 0.7,

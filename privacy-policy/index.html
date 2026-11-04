@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - CallConnect</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --text: #1f2937;
+      --text-muted: #4b5563;
+      --heading: #111827;
+      --border: #e5e7eb;
+      --card-bg: #f9fafb;
+      --table-header-bg: #f3f4f6;
+      --primary: #2563eb;
+      --code-bg: #f3f4f6;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111827;
+        --text: #e5e7eb;
+        --text-muted: #9ca3af;
+        --heading: #f9fafb;
+        --border: #374151;
+        --card-bg: #1f2937;
+        --table-header-bg: #1f2937;
+        --primary: #60a5fa;
+        --code-bg: #1f2937;
+      }
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.65;
+      background-color: var(--bg);
+      color: var(--text);
+      padding: 2rem 1rem;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: var(--bg);
+    }
+    header {
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    h1 {
+      font-size: 2rem;
+      color: var(--heading);
+      margin-bottom: 0.5rem;
+      line-height: 1.25;
+    }
+    .metadata {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .metadata strong {
+      color: var(--heading);
+    }
+    h2 {
+      font-size: 1.4rem;
+      color: var(--heading);
+      margin-top: 2rem;
+      margin-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.4rem;
+    }
+    h3 {
+      font-size: 1.15rem;
+      color: var(--heading);
+      margin-top: 1.25rem;
+      margin-bottom: 0.5rem;
+    }
+    p {
+      margin-bottom: 1rem;
+    }
+    ul, ol {
+      margin-left: 1.5rem;
+      margin-bottom: 1rem;
+    }
+    li {
+      margin-bottom: 0.35rem;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9em;
+      background: var(--code-bg);
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin: 1.25rem 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.25rem 0;
+      font-size: 0.95rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.75rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background-color: var(--table-header-bg);
+      color: var(--heading);
+      font-weight: 600;
+    }
+    footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Privacy Policy for CallConnect</h1>
+      <div class="metadata">
+        <p><strong>Effective Date:</strong> November 4, 2026</p>
+        <p><strong>Last Updated:</strong> November 4, 2026</p>
+        <p><strong>Application ID:</strong> <code>com.boss_01.CallConnect</code></p>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <h2>1. Overview and Core Purpose</h2>
+        <p>CallConnect (&quot;the Application&quot;, &quot;we&quot;, or &quot;us&quot;) is an Android utility application designed to assist users in preparing follow-up text messages after phone calls end.</p>
+        <p>When a call completes, CallConnect provides an on-screen prompt and notification allowing you to select or confirm a recipient, choose or customize a message template, and open your device&#39;s default SMS application to review and send the message yourself.</p>
+      </section>
+
+      <section>
+        <h2>2. Operating Model and On-Device Processing</h2>
+        <p>CallConnect operates primarily through on-device processing:</p>
+        <ul>
+          <li><strong>No Developer Servers:</strong> CallConnect does not operate, maintain, or communicate with developer-managed backend servers, cloud databases, user registration systems, or remote tracking infrastructure.</li>
+          <li><strong>User-Confirmed Sending:</strong> CallConnect does not send text messages automatically in the background. It creates a draft and passes your selected recipient and message text to your chosen Android SMS composer using standard Android system intents (<code>Intent.ACTION_SENDTO</code>). You retain control over reviewing, editing, and physically tapping &quot;Send&quot; in your SMS application.</li>
+          <li><strong>Data Collection Definition:</strong> Under Google Play&#39;s Data Safety standards, &quot;data collection&quot; refers to personal information transmitted off the user&#39;s device. Because CallConnect stores your configurations and activity history on your device and does not transmit this data to external developer servers, CallConnect does not engage in off-device data collection.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>3. Information Handled and How It Is Used</h2>
+        <p>CallConnect handles the following types of data to provide its features:</p>
+
+        <h3>A. Phone Numbers and Contact Information</h3>
+        <ul>
+          <li><strong>Call State Events:</strong> On supported Android versions, a phone number may be provided with telephony broadcast events. On modern Android versions with standard privacy protections, telephony broadcasts without call-log permissions omit the caller number. In such cases, the app prompts you to select or enter the recipient directly in the app.</li>
+          <li><strong>System Contact Picker:</strong> You may choose a recipient from your existing contacts using Android&#39;s system contact picker (<code>Intent.ACTION_PICK</code>). This picker runs through Android&#39;s built-in contact interface; upon selection, only the chosen contact&#39;s phone number and name are returned to populate the draft. CallConnect does not request broad address book read permissions (<code>READ_CONTACTS</code>).</li>
+          <li><strong>Manual Entry:</strong> You may enter or paste a recipient phone number directly into the recipient field.</li>
+        </ul>
+        <p><strong>Usage:</strong> The phone number is used to populate the recipient field of the follow-up prompt and prefill the destination address when opening your SMS application.</p>
+        <p><strong>Storage:</strong> If you save a contact rule or generate an activity log entry, the phone number is stored locally on your device within the app&#39;s private application storage (<code>SharedPreferences</code> and local storage). Phone numbers are masked in user-facing activity logs for privacy.</p>
+
+        <h3>B. Message Content and Templates</h3>
+        <p><strong>Sources:</strong> Message text you type, edit, or select from built-in or custom templates.</p>
+        <p><strong>Usage:</strong> Prefills the text message body in the follow-up prompt and inside the system SMS composer.</p>
+        <p><strong>Storage:</strong> Saved locally within the app&#39;s private storage on your device.</p>
+
+        <h3>C. Operational Settings and Preferences</h3>
+        <p><strong>Usage:</strong> Stores your configuration choices, including:</p>
+        <ul>
+          <li>Follow-up enable/disable switch</li>
+          <li>Prompt delay countdown (grace period)</li>
+          <li>Quiet hours schedule (start and end times)</li>
+          <li>Number filtering rules (allowlist or exclude list)</li>
+          <li>Test mode / simulation options</li>
+        </ul>
+        <p><strong>Storage:</strong> Saved locally within the app&#39;s private storage on your device.</p>
+
+        <h3>D. Activity History and Status Records</h3>
+        <p><strong>Usage:</strong> Displays a local log of recent follow-up events so you can review recent activity. Records include:</p>
+        <ul>
+          <li>Timestamp of the event</li>
+          <li>Masked phone number (e.g., <code>+1 555-***-0199</code>)</li>
+          <li>Message snippet</li>
+          <li>Truthful status labels:
+            <ul>
+              <li><code>PROMPT READY</code>: The call finished and a prompt notification was displayed.</li>
+              <li><code>OPENED IN SMS</code>: You confirmed the prompt, and the app launched your default SMS composer. (CallConnect does not track or verify whether you tapped send or discarded the draft in your SMS app).</li>
+              <li><code>CANCELLED</code>: A pending prompt countdown was cancelled before the composer opened.</li>
+              <li><code>SKIPPED</code>: The prompt was skipped due to quiet hours, number filtering rules, or empty message text.</li>
+              <li><code>SIMULATED</code>: A test simulation was conducted in test mode.</li>
+            </ul>
+          </li>
+        </ul>
+        <p><strong>Storage:</strong> Saved locally within the app&#39;s private storage on your device.</p>
+      </section>
+
+      <section>
+        <h2>4. Android System Permissions and Justification</h2>
+        <p>The release build of CallConnect requests only the following permissions:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Permission</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>android.permission.READ_PHONE_STATE</code></td>
+              <td>Required to register for telephony broadcast events (<code>ACTION_PHONE_STATE_CHANGED</code>) to detect state transitions (ringing, offhook, call ended/idle) so the app knows when a phone call has finished and can trigger the follow-up prompt. It is not used to record call audio or read call history logs.</td>
+            </tr>
+            <tr>
+              <td><code>android.permission.POST_NOTIFICATIONS</code></td>
+              <td>(Android 13+ / API 33+) Required to show interactive notifications when a call ends, including delay countdowns, cancel actions, and quick actions to open the prompt.</td>
+            </tr>
+            <tr>
+              <td><code>android.permission.VIBRATE</code></td>
+              <td>Provides haptic feedback when interacting with buttons and controls in the app.</td>
+            </tr>
+            <tr>
+              <td><code>android.permission.INTERNET</code> &amp; <code>ACCESS_NETWORK_STATE</code></td>
+              <td>Included by the underlying React Native / Expo application framework base configuration. CallConnect application logic does not initiate network requests, transmit telemetry, or transfer user information over the network.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Restricted Permissions Not Requested</h3>
+        <ul>
+          <li><strong>No <code>android.permission.SEND_SMS</code>:</strong> CallConnect does not send background text messages. All messages are dispatched by the user through their default SMS application.</li>
+          <li><strong>No <code>android.permission.READ_CALL_LOG</code> / <code>WRITE_CALL_LOG</code>:</strong> CallConnect does not access or inspect your device&#39;s call log records.</li>
+          <li><strong>No <code>android.permission.SYSTEM_ALERT_WINDOW</code>:</strong> CallConnect does not draw overlay windows on top of other running applications.</li>
+          <li><strong>No Accessibility Services or Notification Listeners:</strong> CallConnect does not scrape on-screen content or read other applications&#39; notifications.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>5. Third-Party Services and External Hand-Off</h2>
+        <ul>
+          <li><strong>No Third-Party Analytics or Advertising:</strong> CallConnect does not integrate advertising SDKs (such as Google AdMob), user analytics SDKs (such as Firebase Analytics or Google Analytics), or third-party behavioral trackers.</li>
+          <li><strong>Default SMS Application and Carrier Hand-Off:</strong> When you choose to proceed with a follow-up, CallConnect transfers the recipient phone number and message body to your device&#39;s default SMS application using Android&#39;s standard intent mechanism (<code>Intent.ACTION_SENDTO</code>). Once your default SMS application opens, handling, transmission, and delivery of that message are governed by the privacy policy of your SMS application and your mobile network operator.</li>
+          <li><strong>Android System Backups:</strong> If you have enabled Android&#39;s automated cloud backup on your device, Android may include the application&#39;s local settings and preferences in your private Google Drive backup associated with your personal Google account, in accordance with your Android system settings.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>6. Data Retention, Control, and Deletion</h2>
+        <ul>
+          <li><strong>Retention:</strong> All settings, templates, rules, and activity logs remain stored in the application&#39;s private storage on your device for as long as the application remains installed.</li>
+          <li><strong>In-App Deletion:</strong> You can clear your activity log at any time by tapping <strong>Clear History</strong> in the Activity Log section of the app.</li>
+          <li><strong>Full Removal:</strong> You can remove all locally stored application data at any time by:
+            <ol>
+              <li>Opening Android <strong>Settings &gt; Apps &gt; CallConnect &gt; Storage</strong>.</li>
+              <li>Selecting <strong>Clear Storage</strong> or <strong>Clear Data</strong>.</li>
+              <li>Alternatively, uninstalling CallConnect deletes the application&#39;s sandbox directory and its local data files from your device.</li>
+            </ol>
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>7. Security of Stored Data</h2>
+        <p>CallConnect relies on the Android application sandbox security architecture, which prevents other standard applications on your device from accessing CallConnect&#39;s private files.</p>
+        <p>To help maintain the security of information stored on your device:</p>
+        <ul>
+          <li>Use a secure screen lock (PIN, password, pattern, or biometric authentication).</li>
+          <li>Keep your device operating system updated with current security patches.</li>
+          <li>Avoid using modified or rooted device operating systems that bypass platform security sandboxing.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>8. Children&#39;s Privacy</h2>
+        <p>CallConnect is intended for a general audience and is not directed to children under 13 years of age (or the minimum legal age in your jurisdiction). The application does not knowingly request or collect personal information from children.</p>
+      </section>
+
+      <section>
+        <h2>9. Changes to This Privacy Policy</h2>
+        <p>This Privacy Policy may be updated periodically to reflect changes in our practices or applicable legal requirements. The &quot;Effective Date&quot; and &quot;Last Updated&quot; dates at the top of this policy indicate when revisions took effect. We encourage you to review this policy periodically.</p>
+      </section>
+
+      <section class="card">
+        <h2>10. Contact Information</h2>
+        <p>If you have questions, feedback, or inquiries regarding this Privacy Policy or CallConnect, please contact:</p>
+        <p><strong>Developer / Publisher:</strong> Sushant Ranjan</p>
+        <p><strong>Support &amp; Privacy Email:</strong> <a href="mailto:sushantpathak2028@gmail.com" style="color: var(--primary);">sushantpathak2028@gmail.com</a></p>
+      </section>
+    </main>
+
+    <footer>
+      <p>&copy; 2026 CallConnect &bull; All Rights Reserved.</p>
+    </footer>
+  </div>
+</body>
+</html>
+
